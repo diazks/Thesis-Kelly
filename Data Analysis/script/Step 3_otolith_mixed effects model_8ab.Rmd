@@ -29,7 +29,10 @@ c. <- function (x) scale(x, scale = FALSE)
 ## 2. LOAD DATA
 
 ```{r}
+#Tuan Anh directory
 dir_otl <- "D:/OneDrive - UGent/FWO/@FWO/05_MSc thesis/2022_Kelly/git_kelly/data" 
+
+# Kelly to put her own
 otl <- read_rds(file.path(dir_otl, "otl_8ab_full for analysis_130223.rds"))
 otl <- otl %>% filter(AnnulusDiameterIncrement.um > 0) #1 point = 0
 
