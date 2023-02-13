@@ -1,0 +1,570 @@
+---
+title: "MIXED EFFECT MODEL WP1"
+output: html_document
+date: '2022-07-19'
+---
+
+## 1. SETUP
+
+```{r include=FALSE}
+# 1. SETUP ----------------------------------------------------------------------
+# PACKAGES
+library(tidyverse)  # process data frame
+library(readr)      # process rds, csv 
+library(lubridate)  # process time
+library(readxl)     # read xlsx
+
+library(lme4)       # fit model
+library(AICcmodavg) # calculate AIC
+library(effects)    # display effect
+library(lattice)    # visualize data
+
+#library(INLA)       # INLA model
+
+# FUNCTION
+MyStd <- function(x) { (x - mean(x)) / sd(x)} #- function to standardize
+c. <- function (x) scale(x, scale = FALSE) 
+```
+
+## 2. LOAD DATA
+
+```{r}
+dir_otl <- "D:/OneDrive - UGent/FWO/@FWO/05_MSc thesis/2022_Kelly/git_kelly/data" 
+otl <- read_rds(file.path(dir_otl, "otl_8ab_full for analysis_130223.rds"))
+otl <- otl %>% filter(AnnulusDiameterIncrement.um > 0) #1 point = 0
+
+#otl <- otl %>% mutate(Yearclass = SamplingYear - AgeAtCapture) #somehow lost Yearclass in previous coding but not time to check
+###covert Year and Cohort variables into factors
+otl <- otl %>% mutate(Year = GrowingYear,
+                      Cohort = Yearclass,
+                      fGrowingYear = factor(GrowingYear),
+                      fYearclass   = factor(Yearclass))
+
+```
+
+## 3. ANALYZE DATA
+
+Model: **log(AnnulusDiameterIncrement.um) \~ Intrinsic Effects + Extrinsic Effects + Random Effects**
+
+Intrinsic Effects:
+
+-   Age
+
+-   AgeAtCapture
+
+Extrinsic Effects:
+
+-   SeaBottomTemperature
+
+-   FishingMortality
+
+-   StockBiomass
+
+Random effects:
+
+-   FishID
+
+-   GrowingYear
+
+-   Yearclass
+
+### 3.1. 8ab
+
+```{r}
+data <- otl
+
+# check number of increment per GrowingYear
+data_sum <- data %>% group_by(GrowingYear) %>% summarize(n_increment = n())
+
+#data <- otl %>% filter(GrowingYear >= 2007, GrowingYear <= 2016) #only >20 increment years
+```
+
+Note: mention the correlation between fixed effects
+
+Sample size:
+
+-   Number of sampled fish: 852, Age At Capture: 3-25
+
+-   Sampling Year: 1960 - 2020
+
+-   Growing Year: 1958 - 2019, Yearclass: 1957 - 2017
+
+```{r}
+# Sampling size
+n_distinct(data$FishID) #181
+sort(unique(data$SamplingYear)) #2008 - 2020
+sort(unique(data$GrowingYear)) #2003 - 2019
+sort(unique(data$Yearclass)) #1997 - 2016
+summary(data$Age) #1-14
+summary(data$AgeAtCapture) #3-14
+
+# AgeAtCapture vs SamplingYear
+data_sum_year <- data %>% group_by(IcesAreaGroup, SamplingYear, AgeAtCapture, FishID) %>% summarize(n = n()) %>% group_by(IcesAreaGroup, SamplingYear, AgeAtCapture) %>% summarize(NumberFishSampled = n())
+
+ggplot(data = data_sum_year, aes(x = SamplingYear, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
+  facet_wrap(~ IcesAreaGroup) + 
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ylim(3,15)
+
+# AgeAtCapture vs Yearclass
+data_sum_yearclass <- data %>% group_by(IcesAreaGroup, Yearclass, AgeAtCapture, FishID) %>% summarize(n = n()) %>% group_by(IcesAreaGroup, Yearclass, AgeAtCapture) %>% summarize(NumberFishSampled = n())
+
+ggplot(data = data_sum_yearclass, aes(x = Yearclass, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
+  facet_wrap(~ IcesAreaGroup) + 
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ylim(3,15)
+
+```
+
+#### 3.1.1. Random effect structure
+
+Fit the maximal intrinsic structure: Age + AgeAtCapture then eventuall find the optimal random effect structure
+
+##### FishID and DataSource
+
+```{r}
+# Age slope
+data$clogAge <- as.vector(c.(log(data$Age)))
+data$clogAAC <- as.vector(c.(log(data$AgeAtCapture)))
+
+ggplot(data = data, aes(x = Age, y = log(AnnulusDiameterIncrement.um))) + geom_point()
+ggplot(data = data, aes(x = log(Age), y = log(AnnulusDiameterIncrement.um))) + geom_point()
+ggplot(data = data, aes(x = c.(log(Age)) , y = log(AnnulusDiameterIncrement.um))) + geom_point()
+```
+
+```{r warning=FALSE}
+# Fit model - iid intercept FishID vs Age slope and intercept FishID
+M1a <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1|FishID), data)
+M1b <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID), data)
+
+# Model comparison
+models<-list(M1a, M1b)
+Modnames <- c('M1a', 'M1b')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+```
+
+Best FishID structure: random slope and intercept for Age, FishID
+
+##### GrowingYear and Yearclass
+
+Fit model with GrowingYear/Yearclass only to find the trend in GrowingYear/Yearclass
+
+```{r}
+# Fit model 
+
+# Intercept
+M2a <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + (1|fGrowingYear), data)
+M2b <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + (1|fYearclass), data)
+
+M3a <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + (1 + clogAge|fGrowingYear), data)
+M3b <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + (1 + clogAge|fYearclass), data)
+
+# Model comparison
+models<-list(M2a, M2b, M3a, M3b)
+Modnames <- c('M2a', 'M2b', 'M3a', 'M3b')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+```
+
+Best GrowingYear structure: random slope and intercept for Age, FishID, GrowingYear (Age\|FishID), (Age\|GrowingYear)
+
+Best Yearclass structure: random slope and intercept for Age, FishID, Yearclass (Age\|FishID), (Age\|Yearclass)
+
+###### **Visualize the GrowingYear**
+
+M3test2 \<- lmer(log(AnnulusDiameterIncrement.um) \~ c.(Age) + c.(AgeAtCapture) + (1\|FishID) + (1\|fGrowingYear), data)
+
+```{r}
+# Growing Year
+
+# extract random effect interecept, slope from the model
+GrowingYear.df <- ranef(M3a)$fGrowingYear
+
+GrowingYear.df <- GrowingYear.df %>% 
+  mutate(GrowingYear = as.numeric(rownames(GrowingYear.df)),
+         Intercept = `(Intercept)`,
+         Slope = clogAge,
+         RandomEffect.se = sqrt(attr(ranef(M3a,postVar=TRUE) [["fGrowingYear"]],"postVar")[1,1,])) 
+
+# create dataframe with random effect by age
+#GrowingYear.df <- as.tibble(sapply(GrowingYear.df, rep.int, times=length(list_clogAge)))
+GrowingYear.df <- GrowingYear.df %>% 
+  mutate(RandomEffect.Intercept = Intercept,
+         RandomEffect.Intercept.upper = RandomEffect.Intercept + RandomEffect.se,
+         RandomEffect.Intercept.lower = RandomEffect.Intercept - RandomEffect.se,
+         ) 
+                                    
+
+
+# Plot Interecept
+ggplot() + 
+  geom_ribbon(data = GrowingYear.df, 
+              aes(x = GrowingYear,
+                  ymax = RandomEffect.Intercept.upper,
+                  ymin = RandomEffect.Intercept.lower), 
+              fill = 'grey70') +
+  geom_line(data = GrowingYear.df, 
+            aes(x = GrowingYear, 
+                y = RandomEffect.Intercept)) +
+  geom_line(aes(x = data$GrowingYear, y = 0), 
+            linetype="dashed") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  #ggtitle("Year random effect") +
+  xlab("Year") +
+  ylab("Year random effect")
+
+
+
+```
+
+###### **Compare Temporal trend with extrinsic variables**
+
+p.adult
+
+```{r}
+library(patchwork)
+
+p.year.adult<- ggplot() +
+  geom_ribbon(data = GrowingYear.df, 
+              aes(x = GrowingYear,
+                  ymax = RandomEffect.Intercept.upper,
+                  ymin = RandomEffect.Intercept.lower),
+              fill = '#01665e',
+              alpha = 0.3) +
+  geom_line(data = GrowingYear.df, 
+            aes(x = GrowingYear, 
+                y = RandomEffect.Intercept),
+            color = '#01665e') +
+  geom_line(aes(x = GrowingYear.df$GrowingYear, y = 0), 
+            linetype = "dashed",
+            color = "grey70") +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  theme(legend.position = "top") +
+  ggtitle("Year effect") +
+  xlim(2003, 2019)
+  
+
+# Temperature
+p.temp.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = GrowingYear, 
+                y = SeaBottomTemperature.degC),
+            color = '#01665e') +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  ggtitle("Sea Bottom Temperature (degC)") +
+  xlim(2003, 2019)
+
+# Fishing mortality
+p.f.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = GrowingYear, 
+                y = FishingMortality),
+            color = '#01665e') +
+   theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ggtitle("Fishing Mortality") +
+  xlim(2003, 2019)
+
+# Stockbiomass
+p.sb.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = GrowingYear, 
+                y = SpawningStockBiomass.1000t),
+            color = '#01665e') +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  ggtitle("Spawning Stock Biomass (1000t)") +
+  xlim(2003, 2019)
+
+
+# Plot by Maturity
+p.adult <- p.year.adult/p.temp.adult/p.f.adult/p.sb.adult + theme(plot.title = element_text(face = "bold"))
+p.adult
+```
+
+###### **Visualize the Yearclass effect**
+
+```{r}
+# Growing Year
+# create dataframe with random effect by age
+#GrowingYear.df <- as.tibble(sapply(GrowingYear.df, rep.int, times=length(list_clogAge)))
+GrowingYear.df <- GrowingYear.df %>% 
+  mutate(RandomEffect.Intercept = Intercept,
+         RandomEffect.Intercept.upper = RandomEffect.Intercept + RandomEffect.se,
+         RandomEffect.Intercept.lower = RandomEffect.Intercept - RandomEffect.se,
+         ) 
+
+# extract random effect interecept, slope from the model
+Yearclass.df <- ranef(M3b)$fYearclass
+
+Yearclass.df <- Yearclass.df %>% 
+  mutate(Yearclass = as.numeric(rownames(Yearclass.df)),
+         Intercept = `(Intercept)`,
+         Slope = clogAge,
+         RandomEffect.se = sqrt(attr(ranef(M3b,postVar=TRUE) [["fYearclass"]],"postVar")[1,1,])) 
+
+# create dataframe with random effect by age
+Yearclass.df <- Yearclass.df %>% 
+  mutate(
+         RandomEffect.Intercept = Intercept,
+         RandomEffect.Intercept.upper = RandomEffect.Intercept + RandomEffect.se,
+         RandomEffect.Intercept.lower = RandomEffect.Intercept - RandomEffect.se
+         ) 
+                                    
+
+
+# Plot Interecept
+ggplot() + 
+  geom_ribbon(data = Yearclass.df, 
+              aes(x = Yearclass,
+                  ymax = RandomEffect.Intercept.upper,
+                  ymin = RandomEffect.Intercept.lower), 
+              fill = 'grey70') +
+  geom_line(data = Yearclass.df, 
+            aes(x = Yearclass, 
+                y = RandomEffect.Intercept)) +
+  geom_line(aes(x = data$Yearclass, y = 0), 
+            linetype="dashed") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ggtitle("Yearclass random effect - Intercept") +
+  xlab("Yearclass") +
+  ylab("Yearclass random effect - Intercept")
+
+```
+
+The Yearclass effect is contrast to that of GrowingYear, both in terms of Intercept and by age. This might be due to a mechanism in the growth of sole, also observed in cod (Denechaude 2020).
+
+**Models with both GrowingYear and Yearclass**
+
+```{r warning=FALSE}
+# GrowingYear + Yearclass 
+M4a <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (clogAge|FishID) + (1|fGrowingYear) + (1|fYearclass), data)
+M4b <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (clogAge|FishID) + (clogAge|fGrowingYear) + (1|fYearclass), data)
+M4c <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (clogAge|FishID) + (1|fGrowingYear) + (clogAge|fYearclass), data)
+M4d <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (clogAge|FishID) + (clogAge|fGrowingYear) + (clogAge|fYearclass), data)
+
+# Model comparison
+models <- list(M2a, M2b, M3a, M3b, M4a, M4b, M4c, M4d)
+Modnames <- c('M2a', 'M2b', 'M3a', 'M3b', 'M4a', 'M4b', 'M4c', 'M4d')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+```
+
+Best random effect structure: random slope and intercept for Age, FishID, GrowingYear - (Age\|FishID), (Age\|GrowingYear)
+
+#### 3.1.2. Intrinsic structure
+
+```{r}
+# GrowingYear + Yearclass 
+M3a1 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + (1 + clogAge|FishID) + (1 + clogAge|fGrowingYear), data)
+
+M3a2 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + (1 + clogAge|fGrowingYear), data)
+
+# Model comparison
+models <- list(M3a1, M3a2)
+Modnames <- c('M3a1', 'M3a2')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+```
+
+Best random effect structure + intrinsic structure: random slope and intercept for Age, FishID, GrowingYear, Yearclass - (Age\|FishID), (Age\|DataSource), (Age\|GrowingYear), (Age\|Yearclass) + Age, AgeAtCapture
+
+Intrinsic effects:
+
+-   Age
+
+#### 3.1.3. Extrinsic structure
+
+FishingMortality + (Age\|FishID) + (Age\|fGrowingYear) + (Age\|fYearclass), data)
+
+M4d3 \<- lmer(log(AnnulusDiameterIncrement.um) \~ Age + SeaBottomTemperature.degC + FishingMortality + SpawningStockBiomass.1000t + (Age\|FishID) + (Age\|fGrowingYear) + (Age\|fYearclass), data)
+
+M4d11 \<- lmer(log(AnnulusDiameterIncrement.um) \~ Age + FishingMortality\*clogAge + (Age\|FishID) + (Age\|fGrowingYear) + (Age\|fYearclass), data)
+
+```{r}
+# Temperature, FishingMortality.juv2, StockBiomassAtMaturity, MaturityStage
+
+# 1 var
+M3a4 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + (1 + clogAge|fGrowingYear), data)
+
+M3a5 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality + (1 + clogAge|fGrowingYear), data)
+
+M3a6 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+# 2 vars
+M3a7 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + FishingMortality + (1 + clogAge|fGrowingYear), data)
+
+M3a8 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality + SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+M3a9 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+# 3 vars
+M3a10 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + FishingMortality + SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+
+# interaction 1 var Age
+M3a11 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a12 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a13 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+# interaction 2 vars Age
+M3a14 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a15 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + FishingMortality + (1 + clogAge|fGrowingYear), data)
+
+M3a16 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+
+M3a17 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a18 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+M3a19 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+
+
+M3a20 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality*clogAge +  SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a21 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality +  SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a22 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality*clogAge +  SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+# interaction 3 vars Age
+M3a23 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*clogAge + FishingMortality*clogAge +  SpawningStockBiomass.1000t*clogAge + (1 + clogAge|fGrowingYear), data)
+
+# interaction vars
+M3a24 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*FishingMortality +  SpawningStockBiomass.1000t + (1 + clogAge|fGrowingYear), data)
+
+M3a25 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC*SpawningStockBiomass.1000t + FishingMortality + (1 + clogAge|fGrowingYear), data)
+
+# Model comparison
+models<-list(M3a2, M3a4, M3a5, M3a6, M3a7, M3a8, M3a9, M3a10, M3a11, M3a12, M3a13, M3a14, M3a15, M3a16, M3a17, M3a18, M3a19, M3a20, M3a21, M3a22, M3a23, M3a24, M3a25)
+Modnames <- c('M3a2', 'M3a4', 'M3a5', 'M3a6', 'M3a7', 'M3a8', 'M3a9', 'M3a10', 'M3a11', 'M3a12', 'M3a13', 'M3a14', 'M3a15', 'M3a16', 'M3a17', 'M3a18', 'M3a19', 'M3a20', 'M3a21', 'M3a22', 'M3a23', 'M3a24', 'M3a25') 
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+```
+
+Best model: M4d11 - M4d11 \<- lmer(log(AnnulusDiameterIncrement.um) \~ Age + FishingMortality\*clogAGe + (Age\|FishID) + (Age\|fGrowingYear) + (Age\|fYearclass), data)
+
+```{r}
+# Refit with REML 
+M3a12.reml <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data, REML = T)
+
+
+```
+
+#### 3.1.4. Visualize effect
+
+##### Age
+
+```{r}
+df_Age <- unique(select(data, Age, clogAge))
+
+age.plot <- as.data.frame (Effect ('clogAge', M3a12.reml, xlevels = list(clogAge = df_Age$clogAge)))
+#age.plot <- as.data.frame (Effect (c('Age'), M4d11.reml, xlevels = list(Age=seq(1,14, by=1))))
+age.plot <- age.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower),
+                                Age = df_Age$Age)
+
+ggplot() + 
+  geom_point(data = age.plot, aes(x = Age, y = transfit)) +
+  geom_errorbar(data = age.plot, aes(x = Age,
+                                    ymin = tranlower, 
+                                    ymax = transupper), 
+                width=.2) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Age (year)") +
+  ylab("Predicted annual growth (µm)")
+```
+
+##### Age at capture
+
+```{r}
+df_AAC <- unique(select(data, AgeAtCapture, clogAAC))
+
+aac.plot <- as.data.frame (Effect ('clogAAC', M3a12.reml, xlevels = list(clogAAC = df_AAC$clogAAC)))
+#age.plot <- as.data.frame (Effect (c('Age'), M4d11.reml, xlevels = list(Age=seq(1,14, by=1))))
+aac.plot <- aac.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower),
+                                AgeAtCapture = df_AAC$AgeAtCapture)
+
+ggplot() + 
+  geom_ribbon(data = aac.plot, 
+              aes(x = AgeAtCapture,
+                  ymax = transupper,
+                  ymin = tranlower),
+             alpha = 0.5) +
+  geom_line(data = aac.plot, 
+            aes(x = AgeAtCapture, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Age At Capture (year)") +
+  ylab("Predicted annual growth (µm)") +
+  xlim(3,15)
+```
+
+##### FishingMortality
+
+```{r}
+df_Age <- unique(select(data, Age, clogAge))
+
+f.plot <- as.data.frame (Effect (c('FishingMortality','clogAge'), M3a12.reml, xlevels = list(clogAge = df_Age$clogAge)))
+
+f.plot <- f.plot %>% mutate(transfit = exp(fit),
+                            transupper = exp(upper),
+                            tranlower = exp(lower),
+                            clogAge = as.factor(clogAge)
+                            )
+
+df_Age <- df_Age %>% mutate(Age = as.factor(Age),
+                            clogAge = as.factor(clogAge))
+f.plot <- left_join(f.plot, df_Age, by = "clogAge")
+
+
+ggplot() +
+ geom_ribbon(data = f.plot, 
+              aes(x = FishingMortality,
+                  ymax = transupper,
+                  ymin = tranlower, 
+                  fill = Age),
+             alpha = 0.5) +
+  geom_line(data = f.plot, 
+            aes(x = FishingMortality, 
+                y = transfit, color = Age),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Fishing Mortality") +
+  ylab("Predicted annual growth (µm)") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold"))
+  
+```
+
+##### 
