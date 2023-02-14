@@ -30,7 +30,7 @@ c. <- function (x) scale(x, scale = FALSE)
 
 ```{r}
 #Tuan Anh directory
-dir_otl <- "D:/OneDrive - UGent/FWO/@FWO/05_MSc thesis/2022_Kelly/git_kelly/data" 
+dir_otl <- "D:/OneDrive - UGent/FWO/@FWO/05_MSc thesis/2022_Kelly/git_kelly/Data Analysis/data" 
 
 # Kelly to put her own
 otl <- read_rds(file.path(dir_otl, "otl_8ab_full for analysis_130223.rds"))
@@ -75,6 +75,9 @@ Random effects:
 
 ```{r}
 data <- otl
+
+data$clogAge <- as.vector(c.(log(data$Age)))
+data$clogAAC <- as.vector(c.(log(data$AgeAtCapture)))
 
 # check number of increment per GrowingYear
 data_sum <- data %>% group_by(GrowingYear) %>% summarize(n_increment = n())
@@ -473,6 +476,35 @@ M3a12.reml <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + c
 
 ```
 
+##### Within vs Between individual
+
+```{r}
+# Add within vs among indiviudal temperature
+# amongIDV - average temperature the fish experience in its life
+# withinIDV - deviation of annual temperature from the mean (amongIDV)
+
+data$amongIDV<-ave(data$SeaBottomTemperature.degC,data$FishID)
+data$withinIDV <- data$SeaBottomTemperature.degC - data$amongIDV
+
+
+M3a12 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a16 <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + SeaBottomTemperature.degC + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a16a <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge|FishID) + withinIDV + amongIDV + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+M3a16b <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge + withinIDV|FishID) + withinIDV + amongIDV + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data)
+
+
+models<-list(M3a12, M3a16, M3a16a, M3a16b)
+Modnames <- c('M3a12', 'M3a16', 'Ma16a', 'Ma16b') 
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+# M3a16b is the best model
+summary(M3a16b)
+M3a16b.reml <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + clogAge + withinIDV|FishID) + withinIDV + amongIDV + FishingMortality*clogAge + (1 + clogAge|fGrowingYear), data, REML = TRUE)
+```
+
 #### 3.1.4. Visualize effect
 
 ##### Age
@@ -480,7 +512,7 @@ M3a12.reml <- lmer(log(AnnulusDiameterIncrement.um) ~ clogAge + clogAAC + (1 + c
 ```{r}
 df_Age <- unique(select(data, Age, clogAge))
 
-age.plot <- as.data.frame (Effect ('clogAge', M3a12.reml, xlevels = list(clogAge = df_Age$clogAge)))
+age.plot <- as.data.frame (Effect ('clogAge', M3a16b.reml, xlevels = list(clogAge = df_Age$clogAge)))
 #age.plot <- as.data.frame (Effect (c('Age'), M4d11.reml, xlevels = list(Age=seq(1,14, by=1))))
 age.plot <- age.plot %>% mutate(transfit = exp(fit),
                                 transupper = exp(upper),
@@ -505,7 +537,7 @@ panel.background = element_blank()) +
 ```{r}
 df_AAC <- unique(select(data, AgeAtCapture, clogAAC))
 
-aac.plot <- as.data.frame (Effect ('clogAAC', M3a12.reml, xlevels = list(clogAAC = df_AAC$clogAAC)))
+aac.plot <- as.data.frame (Effect ('clogAAC', M3a16b.reml, xlevels = list(clogAAC = df_AAC$clogAAC)))
 #age.plot <- as.data.frame (Effect (c('Age'), M4d11.reml, xlevels = list(Age=seq(1,14, by=1))))
 aac.plot <- aac.plot %>% mutate(transfit = exp(fit),
                                 transupper = exp(upper),
@@ -535,7 +567,7 @@ panel.background = element_blank()) +
 ```{r}
 df_Age <- unique(select(data, Age, clogAge))
 
-f.plot <- as.data.frame (Effect (c('FishingMortality','clogAge'), M3a12.reml, xlevels = list(clogAge = df_Age$clogAge)))
+f.plot <- as.data.frame (Effect (c('FishingMortality','clogAge'), M3a16b.reml, xlevels = list(clogAge = df_Age$clogAge)))
 
 f.plot <- f.plot %>% mutate(transfit = exp(fit),
                             transupper = exp(upper),
@@ -570,4 +602,55 @@ panel.background = element_blank()) +
   
 ```
 
-##### 
+##### Temperature within individual
+
+```{r}
+sbt.within.plot <- as.data.frame (Effect (c('withinIDV'), M3a16b.reml, xlevels = 19))
+sbt.within.plot <- sbt.within.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower))
+
+ggplot() +
+ geom_ribbon(data = sbt.within.plot, 
+              aes(x = withinIDV,
+                  ymax = transupper,
+                  ymin = tranlower),
+             fill = 'grey70') +
+  geom_line(data = sbt.within.plot, 
+            aes(x = withinIDV, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold")) +
+  xlab("Sea Bottom Temperature within individual (degC)") +
+  ylab("Predicted annual growth (µm)")
+
+```
+
+##### **Temperature among individual**
+
+```{r}
+sbt.among.plot <- as.data.frame (Effect (c('amongIDV'), M3a16b.reml, xlevels = 19))
+sbt.among.plot <- sbt.among.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower))
+
+ggplot() +
+ geom_ribbon(data = sbt.among.plot, 
+              aes(x = amongIDV,
+                  ymax = transupper,
+                  ymin = tranlower),
+             fill = 'grey70') +
+  geom_line(data = sbt.among.plot, 
+            aes(x = amongIDV, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold")) +
+  xlab("Sea Bottom Temperature among individual (degC)") +
+  ylab("Predicted annual growth (µm)")
+```
