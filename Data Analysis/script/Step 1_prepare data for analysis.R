@@ -177,7 +177,7 @@ ggplot() +
   geom_point(data = otl_ilvo, aes(x = Length.mm, y = AnnulusDiameter.um), alpha = 0.5) + 
   facet_grid(~ Age)
 
-## 2.4. REMOVE INCOMPLETE GROWTH INCREMENT ----------------------------------------------------
+## 2.2. REMOVE INCOMPLETE GROWTH INCREMENT ----------------------------------------------------
 
 # incomplete growth increments are increment that are the increment in a year which is 
 # measured but not completed as the winter ring of that growth year
@@ -191,18 +191,18 @@ ggplot() +
 # create increment id -> extract incomplete growth -> remove incomplete growth
 
 # 1. create increment id
-otl_ilvo <- otl_ilvo %>% rowid_to_column("IncrementID")
+otl_full <- otl_full %>% rowid_to_column("IncrementID")
 
 # 2. extract incomplete growth increments
-otl_incomplete <- otl_ilvo %>% filter(month(SamplingDate) <= 4, AgeAtCapture == Age) 
+otl_incomplete <- otl_full %>% filter(month(SamplingDate) <= 4, AgeAtCapture == Age) 
 
 # 3. remove incomplete growth
-otl_ilvo <- otl_ilvo %>% filter(!(IncrementID %in% otl_incomplete$IncrementID)) 
-otl_ilvo <- otl_ilvo %>% select(-IncrementID)
+otl_full <- otl_full %>% filter(!(IncrementID %in% otl_incomplete$IncrementID)) 
+otl_full <- otl_full %>% select(-IncrementID)
 
-## 2.5. ADD TEMPERATURE AND FISHING DATA ----------------------------------------------------
+## 2.3. ADD TEMPERATURE AND FISHING DATA ----------------------------------------------------
 
-### 2.5.1. TEMPERATURE (SEA BOTTOM TEMPERATURE) -----------------------------
+### 2.3.1. TEMPERATURE (SEA BOTTOM TEMPERATURE) -----------------------------
 # ISIMIP Sea Bottom Temperature - processed in isimip_thetao_process.R
 
 dir_sbt <- "D:/OneDrive - UGent/data/Env/Sea Temperature_ISIMIP3_0.5deg_1850-2014"
@@ -212,23 +212,29 @@ sbt_ices <- read_rds(file.path(dir_sbt, "isimip_sbt_ices.rds"))
 sbt_ices <- sbt_ices %>% group_by(IcesArea, Year) %>% summarize(SeaBottomTemperature.degC = mean(isimip_sbt, na.rm = T))
 
 # add SeaBottomTemperature to otl data
-otl_ilvo <- left_join(otl_ilvo, sbt_ices, by = c("IcesAreaGroup" = "IcesArea", "GrowingYear" = "Year"))
+otl_full <- left_join(otl_full, sbt_ices, by = c("IcesAreaGroup" = "IcesArea", "GrowingYear" = "Year"))
 
-### 2.5.2. FISHING MORTALITY, STOCK BIOMASS -----------------------------
+### 2.3.2. FISHING MORTALITY, STOCK BIOMASS -----------------------------
 
 # load ices data
 dir_ices <- "D:/OneDrive - UGent/data/ICES"
-ices <- read_delim(file.path(dir_ices, "ICES_StockAssessment_2021.csv"), delim = ";")
 
-# rename fileds
-ices <- ices %>% mutate(IcesAreaGroup = if_else(IcesArea == "4", "4bc", IcesArea),
-                        SpawningStockBiomass.1000t = SSB_t/1000,
-                        FishingMortality = Fbar,
-                        GrowingYear = Year)
+ices_4 <- read_excel(file.path(dir_ices, "WGNSSK 2021_4_summary.xlsx")) %>% mutate(IcesAreaGroup = "4bc")
+ices_7a <- readxl::read_excel(file.path(dir_ices, "WGCSE2021_7a_summary.xlsx")) %>% mutate(IcesAreaGroup = "7a")
+ices_8ab <- readxl::read_excel(file.path(dir_ices, "WGBIE 2021_8ab_summary.xlsx")) %>% mutate(IcesAreaGroup = "8ab")
 
-# Add FishingMortality and SpawningStockBiomass to otl_ilvo 
-otl_ilvo <- left_join(otl_ilvo, ices, by = c("IcesAreaGroup", "GrowingYear"))
+ices <- bind_rows(ices_4, ices_7a, ices_8ab)
+
+# rename filds
+ices <- ices %>% 
+  mutate(SpawningStockBiomass.1000t = SSB_t/1000,
+         FishingMortality = as.numeric(Fbar),
+         GrowingYear = Year) %>%
+  select(IcesAreaGroup, GrowingYear, SpawningStockBiomass.1000t, FishingMortality)
+
+# Add FishingMortality and SpawningStockBiomass to otl_full 
+otl_full <- left_join(otl_full, ices, by = c("IcesAreaGroup", "GrowingYear"))
 
 # 3. SAVE DATA ---------------------------------------------------------------
-write_rds(otl_ilvo, file.path(dir_otl, "otl_ilvo.rds"))
+write_rds(otl_full, file.path(dir_otl, "otl_full.rds"))
 
