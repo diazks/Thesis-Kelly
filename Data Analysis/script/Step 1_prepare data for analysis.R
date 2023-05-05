@@ -144,6 +144,39 @@ otl_ilvo <- otl_ilvo %>% mutate(OtolithProcessingMethod = if_else(OtolithProcess
 otl_ilvo <- otl_ilvo %>% mutate(OtolithProcessingMethod = if_else(FishID %in% list_ifremer, "sectioned", OtolithProcessingMethod))
 
 
+#### 2.1.2.3. Pre-explore data ------------------------
+
+# 3.0 check negative increment
+neg_increment <- otl_ilvo %>% filter(AnnulusDiameterIncrement.um <= 0) %>% 
+  select(IcesAreaGroup, SamplingDate, Scale.pixelpermm, SmartlabNumber, Age, AnnulusDiameter.um:OtolithWidth.um)
+
+# 3.1. check for NA increment (due to error in aging annotation, or comment (same LONG/SHORT))
+na_increment <- otl_ilvo %>% filter(is.na(AnnulusDiameter.um) == T) %>% 
+  select(IcesAreaGroup, SamplingYear, SmartlabNumber)
+
+# 3.2. check for NA File_Scale 
+na_scale <- otl_ilvo %>% filter(is.na(Scale.pixelpermm) == T) %>% 
+  select(IcesAreaGroup, SamplingYear, SmartlabNumber)
+
+# 3.3. check for unusual scale
+## list ifremer data
+list_ifremer <- unique(filter(otl_ilvo, str_detect(FishID, "RE|AL|CO") == TRUE)$FishID)
+
+# usual scale zeiss: 134, 172, 217, 219, 269, 270, 272, 345
+# usual scale leica: 429, 437, 545, 593
+sort(unique(filter(otl_ilvo, !FishID %in% list_ifremer)$Scale.pixelpermm)) 
+
+# usual scale ifremer: 182, 212, 223, 224, 220, 226, 228, 228.5, 232, 260, 267, 279 
+sort(unique(filter(otl_ilvo, FishID %in% list_ifremer)$Scale.pixelpermm)) 
+
+# 3.4. check for NA Outcome_Quality
+na_quality <- otl_ilvo %>% filter(is.na(AQCode) == T)
+
+# 3.5. Check for outliner (due to wrong assignment of scale/reading error)
+ggplot() +
+  geom_point(data = otl_ilvo, aes(x = Length.mm, y = AnnulusDiameter.um), alpha = 0.5) + 
+  facet_grid(~ Age)
+
 ## 2.4. REMOVE INCOMPLETE GROWTH INCREMENT ----------------------------------------------------
 
 # incomplete growth increments are increment that are the increment in a year which is 
