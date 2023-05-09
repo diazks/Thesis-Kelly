@@ -191,14 +191,14 @@ ggplot() +
 # create increment id -> extract incomplete growth -> remove incomplete growth
 
 # 1. create increment id
-otl_full <- otl_full %>% rowid_to_column("IncrementID")
+otl_ilvo <- otl_ilvo %>% rowid_to_column("IncrementID")
 
 # 2. extract incomplete growth increments
-otl_incomplete <- otl_full %>% filter(month(SamplingDate) <= 4, AgeAtCapture == Age) 
+otl_incomplete <- otl_ilvo %>% filter(month(SamplingDate) <= 4, AgeAtCapture == Age) 
 
 # 3. remove incomplete growth
-otl_full <- otl_full %>% filter(!(IncrementID %in% otl_incomplete$IncrementID)) 
-otl_full <- otl_full %>% select(-IncrementID)
+otl_ilvo <- otl_ilvo %>% filter(!(IncrementID %in% otl_incomplete$IncrementID)) 
+otl_ilvo <- otl_ilvo %>% select(-IncrementID)
 
 ## 2.3. ADD TEMPERATURE AND FISHING DATA ----------------------------------------------------
 
@@ -212,7 +212,7 @@ sbt_ices <- read_rds(file.path(dir_sbt, "isimip_sbt_ices.rds"))
 sbt_ices <- sbt_ices %>% group_by(IcesArea, Year) %>% summarize(SeaBottomTemperature.degC = mean(isimip_sbt, na.rm = T))
 
 # add SeaBottomTemperature to otl data
-otl_full <- left_join(otl_full, sbt_ices, by = c("IcesAreaGroup" = "IcesArea", "GrowingYear" = "Year"))
+otl_ilvo <- left_join(otl_ilvo, sbt_ices, by = c("IcesAreaGroup" = "IcesArea", "GrowingYear" = "Year"))
 
 ### 2.3.2. FISHING MORTALITY, STOCK BIOMASS -----------------------------
 
@@ -232,9 +232,9 @@ ices <- ices %>%
          GrowingYear = Year) %>%
   select(IcesAreaGroup, GrowingYear, SpawningStockBiomass.1000t, FishingMortality)
 
-# Add FishingMortality and SpawningStockBiomass to otl_full 
-otl_full <- left_join(otl_full, ices, by = c("IcesAreaGroup", "GrowingYear"))
+# Add FishingMortality and SpawningStockBiomass to otl_ilvo 
+otl_ilvo <- left_join(otl_ilvo, ices, by = c("IcesAreaGroup", "GrowingYear"))
 
 # 3. SAVE DATA ---------------------------------------------------------------
-write_rds(otl_full, file.path(dir_otl, "otl_full.rds"))
+write_rds(otl_ilvo, file.path(dir_otl, "otl_ilvo.rds"))
 
