@@ -418,16 +418,19 @@ summary(M4.f)
 M4.reml <- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.log.age*c.f, data, REML = T)
 ```
 
+#### sbt.within vs sbt.among
 ```{r}
-# try model with age >= 2 (no singular (1 + c.log.age|FishID))
-data2 <- data %>% filter(age >= 2)
-M4.f.age2 <- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.log.age*c.f, data, REML = F, na.action = "na.fail")
-model.compare.extrinsic.f.age2 <- dredge(M4.f.age2, fixed = c("c.log.age", "method", "c.log.aac"))
-model.compare.extrinsic.f.age2
+M4.test <- lmer(log(increment) ~ c.log.age + c.log.aac + method + (1 | FishID) + (1 + c.log.age| fyear) + sbt.within*c.log.age + sbt.among*c.log.age + c.f*c.log.age + sbt.within*c.f + sbt.among*c.f, data, REML = F, na.action = "na.fail")
+model.compare.extrinsic.sbt <- dredge(M4.test, fixed = c("c.log.age", "method", "c.log.aac", "sbt.within", "sbt.among"))
+model.compare.extrinsic.sbt
 
-M4.f.age2 <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 + c.log.age| FishID) + (1 + c.log.age| fyear) + c.sbt*c.f, data2, REML = F)
+model.compare.extrinsic.sbt$AICc[1]
+model.compare.extrinsic.ssb$AICc[1]
+model.compare.extrinsic.f$AICc[1]
 
-#Result is same as M4f
+# best extrinsic model
+M4.reml <- lmer(log(increment) ~ c.log.age + c.log.aac + method + (1 | FishID) + (1 + c.log.age| fyear) + sbt.within*c.log.age + sbt.among, data, REML = T)
+
 ```
 
 
