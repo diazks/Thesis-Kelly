@@ -149,7 +149,7 @@ panel.background = element_blank()) +
 # AgeAtCapture vs Cohort
 data_sum_yearclass <- data %>% group_by(IcesAreaGroup, Cohort, AgeAtCapture, FishID) %>% summarize(n = n()) %>% group_by(IcesAreaGroup, Cohort, AgeAtCapture) %>% summarize(NumberFishSampled = n())
 
-ggplot(data = data_sum_yearclass, aes(x = GrowingYear, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
+ggplot(data = data_sum_yearclass, aes(x = Cohort, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
   facet_wrap(~ IcesAreaGroup) + 
   theme_bw() +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
@@ -202,7 +202,7 @@ M2b <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 | FishID) + (1 + 
 
 # Model comparison
 models<-list(M1a, M2a, M2b)
-Modnames <- c('M1b', 'M2a', 'M2b')
+Modnames <- c('M1b', 'M2a', 'M2b') #no singular fit
 aictab(cand.set = models, modnames = Modnames, sort = TRUE)
 
 # Model M2b better in AIC
@@ -389,22 +389,23 @@ Best intrinsic structure: c.log.age + method + c.log.aac + (1 | FishID) + (1 + c
 
 
 ```{r}
+# Fishing Pressure
 M4.f <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear) + c.sbt*c.log.age + c.f*c.log.age + c.sbt*c.f, data, REML = F, na.action = "na.fail")
 model.compare.extrinsic.f <- dredge(M4.f, fixed = c("c.log.age", "method", "c.log.aac"))
 model.compare.extrinsic.f
 
-# No singular warning
+## No singular warning
 M4.f <- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.log.age*c.f, data, REML = F)
 
-
+# Spawning Stock Biomass
 M4.ssb <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear) + c.sbt*c.log.age + c.ssb*c.log.age + c.sbt*c.ssb, data, REML = F, na.action = "na.fail")
 model.compare.extrinsic.ssb <- dredge(M4.ssb, fixed = c("c.log.age", "method", "c.log.aac"))
 model.compare.extrinsic.ssb
 
-#No singular warning
+## No singular warning
 M4.ssb <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear), data, REML = F)
 
-# Model comparison
+# Model comparison - Fishing Pressure and Spawning Stock Biomass
 models<-list(M4.f, M4.ssb)
 Modnames <- c('M4.f', 'M4.ssb')
 aictab(cand.set = models, modnames = Modnames, sort = TRUE)
@@ -641,10 +642,41 @@ ggplot() +
 
 
 
-##### Temperature within individual
+##### Temperature among and within individual
 
 ```{r}
-sbt.within.plot <- as.data.frame (Effect (c('withinIDV'), M3a16b.reml, xlevels = 19))
+install.packages("stats")
+install.packages("plyr")
+install.packages("base")
+install.packages("effects")
+library(stats)
+library(plyr)
+library(base)
+library(effects)
+
+# Nnew variables for the mean temperature experienced by an individual across its lifetime (sbt.among) and the deviation of each observation from the individual-specific mean (sbt.within)
+data$sbt.among<-ave(data$sbt,data$FishID)
+data<-ddply(data, .(FishID), transform, sbt.within = scale(sbt,scale=F))
+
+# M5 within and among individual temperature - just fixed effects
+M5<- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.(sbt.among) + c.(sbt.within), data, REML = T)
+
+# Individual-specific differences (fitting random sbt.within slope for each FishID)
+# M6 within and among individual temperature - with random within slope
+M6<- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.(sbt.among) + c.(sbt.within) + (c.(sbt.within) |FishID), data, REML = T)
+
+## Comparison of models
+models<-list(M5,M6)
+Modnames <- c('M5','M6')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+# M6 best AICc
+# Evidence of individual-specific reaction norms. Majority of the population-level temperature effect due to within-individual differences in lifetime temperature?
+
+
+
+
+sbt.within.plot <- as.data.frame (effect(c('sbt.within'), M4.reml, xlevels = 19))
 sbt.within.plot <- sbt.within.plot %>% mutate(transfit = exp(fit),
                                 transupper = exp(upper),
                                 tranlower = exp(lower))
@@ -671,7 +703,7 @@ panel.background = element_blank()) +
 ##### **Temperature among individual**
 
 ```{r}
-sbt.among.plot <- as.data.frame (Effect (c('amongIDV'), M3a16b.reml, xlevels = 19))
+sbt.among.plot <- as.data.frame (Effect (c('amongIDV'), M4.reml, xlevels = 19))
 sbt.among.plot <- sbt.among.plot %>% mutate(transfit = exp(fit),
                                 transupper = exp(upper),
                                 tranlower = exp(lower))
