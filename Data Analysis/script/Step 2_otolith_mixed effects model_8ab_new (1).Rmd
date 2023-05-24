@@ -1,0 +1,727 @@
+---
+title: "MIXED EFFECT MODEL WP1"
+output: html_document
+date: '2022-07-19'
+---
+
+## 1. SETUP
+
+```{r include=FALSE}
+# 1. SETUP ----------------------------------------------------------------------
+# PACKAGES
+library(tidyverse)  # process data frame
+library(readr)      # process rds, csv 
+library(lubridate)  # process time
+library(readxl)     # read xlsx
+
+library(lme4)       # fit model
+library(AICcmodavg) # calculate AIC
+library(effects)    # display effect
+library(lattice)    # visualize data
+
+#library(INLA)       # INLA model
+install.packages("MuMIn")
+library(MuMIn)      # model selection
+# FUNCTION
+c. <- function (x) scale(x, scale = FALSE)  
+```
+
+## 2. LOAD DATA
+
+```{r}
+#Tuan Anh directory
+dir_otl <- "E:/Kelly/VUB/Thesis/Data Analysis" 
+
+# Kelly to put her own
+otl <- read_rds(file.path(dir_otl, "otl_ilvo.rds"))
+
+#remove otl with increment < 0 or NA
+neg_increment <- otl %>% filter(AnnulusDiameterIncrement.um < 0)
+na_increment <- otl %>% filter(is.na(AnnulusDiameterIncrement.um) == T)
+
+# 0 increment, add a small value 0.05 to avoid log issue 
+incremet_0 <- otl %>% filter(AnnulusDiameterIncrement.um == 0) #
+otl <- otl %>% mutate(AnnulusDiameterIncrement.um = if_else(AnnulusDiameterIncrement.um == 0, 0.05, AnnulusDiameterIncrement.um))
+
+# Transform OtolithProcessingMethod of ifremer otolith (FishID with RE, CO) 
+# was assigned S&S in previous step (should be changed later)
+
+#list_ifremer_RE <- grep(c("RE"), unique(otl$FishID), value = TRUE) #list of experiment SampleSet_Code
+#list_ifremer_CO <- grep(c("CO"), unique(otl$FishID), value = TRUE) #list of experiment SampleSet_Code
+#list_ifremer <- c(list_ifremer_RE, list_ifremer_CO)
+
+#otl <- otl %>% mutate(OtolithProcessingMethod = if_else(FishID %in% list_ifremer, "S", OtolithProcessingMethod))
+
+# Change name and transform variables
+
+# center explanatory variables (see Morrongiello 2015)
+# Age, AgeAtCapture: log transformed, then x - mean(x)
+# sbt, ssb, f: x - mean(x) 
+
+data <- otl %>% mutate(increment = AnnulusDiameterIncrement.um,
+                      age = Age,
+                      c.log.age = c.(log(Age)),
+                      aac = AgeAtCapture,
+                      c.log.aac = c.(log(AgeAtCapture)), 
+                      method = OtolithProcessingMethod,
+                      pop = IcesAreaGroup,
+                      year = GrowingYear,
+                      fyear = factor(GrowingYear),
+                      sbt = SeaBottomTemperature.degC,
+                      c.sbt = c.(SeaBottomTemperature.degC),
+                      ssb = SpawningStockBiomass.1000t,
+                      c.ssb = c.(SpawningStockBiomass.1000t),
+                      f = FishingMortality,
+                      c.f = c.(FishingMortality))
+
+#Raw data
+n_distinct(data$FishID) #245 fish #1356 observations
+sort(unique(data$SamplingYear)) #1989-2020 #not 1991-1993, 1995, 1998, 2000, 2007
+sort(unique(data$Cohort)) #1979, 1985, 1988-2016
+summary(data$Age) #1-14
+
+# check number of increment per GrowingYear
+data_sum <- data %>% group_by(year) %>% summarize(n_increment = n())
+
+data <- data %>% filter((year >= 1991 & year <= 1998) | (year >= 2003 & year<=2017)) #only >20 increments/year (should be >30/50 increments/year) 1991-1998 & 2003-2017
+
+```
+
+## 3. ANALYZE DATA
+
+Model: **log(AnnulusDiameterIncrement.um) \~ Intrinsic Effects + Extrinsic Effects + Random Effects**
+
+Intrinsic Effects:
+
+-   Age
+
+-   AgeAtCapture
+
+-   Method
+
+Extrinsic Effects:
+
+-   SeaBottomTemperature
+
+-   FishingMortality
+
+-   StockBiomass
+
+Random effects:
+
+-   FishID
+
+-   GrowingYear
+
+-   Yearclass
+
+### 3.1. 8ab
+
+Note: mention the correlation between fixed effects
+
+Sample size:
+
+-   Number of sampled fish: 852, Age At Capture: 3-25
+
+-   Sampling Year: 1960 - 2020
+
+-   Growing Year: 1958 - 2019, Yearclass: 1957 - 2017
+
+```{r}
+# Sampling size
+n_distinct(data$FishID) #239 fish #1235 observations
+sort(unique(data$SamplingYear)) #1994 - 1999, 2001, 2004 - 2007, 2008 - 2020
+sort(unique(data$Cohort)) #1988 - 2016
+sort(unique(data$GrowingYear)) #1991 - 1998, 2003 - 2017
+summary(data$Age) #1-14
+summary(data$AgeAtCapture) #3-14
+
+# AgeAtCapture vs SamplingYear
+data_sum_year <- data %>% group_by(IcesAreaGroup, SamplingYear, AgeAtCapture, FishID) %>% summarize(n = n()) %>% group_by(IcesAreaGroup, SamplingYear, AgeAtCapture) %>% summarize(NumberFishSampled = n())
+
+ggplot(data = data_sum_year, aes(x = SamplingYear, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
+  facet_wrap(~ IcesAreaGroup) + 
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ylim(3,15)
+
+# AgeAtCapture vs Cohort
+data_sum_yearclass <- data %>% group_by(IcesAreaGroup, Cohort, AgeAtCapture, FishID) %>% summarize(n = n()) %>% group_by(IcesAreaGroup, Cohort, AgeAtCapture) %>% summarize(NumberFishSampled = n())
+
+ggplot(data = data_sum_yearclass, aes(x = Cohort, y = AgeAtCapture, size = NumberFishSampled)) + geom_point(alpha = 0.5) + 
+  facet_wrap(~ IcesAreaGroup) + 
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ylim(3,15)
+
+```
+
+#### 3.1.0. Check collinearity
+```{r}
+source("E:/Kelly/VUB/Thesis/Data Analysis/HighstatLibV12.R") # support
+MyVar <- c("c.log.age", "c.log.aac", "sbt", "ssb", "f")
+corvif(data[,MyVar]) 
+```
+
+
+#### 3.1.1. Random effect structure
+
+Fit the maximal intrinsic structure: c.log.age*method + c.log.aac then eventually find the optimal random effect structure
+
+##### FishID 
+
+```{r warning=FALSE}
+# Fit model - iid intercept FishID vs Age slope and intercept FishID
+M1a <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 | FishID), data, REML = T)
+M1b <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 + c.log.age|FishID), data, REML = T)
+
+# Model comparison
+models<-list(M1a, M1b)
+Modnames <- c('M1a', 'M1b')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+# M1b is better in AICc but M1b is singular fit -> do M1a
+
+# Note: if remove age 1 then M1b has no singular fit -> worth to think about 
+```
+
+Best FishID structure: (1 | FishID) (in case keeping age 1)
+
+##### year
+
+Fit model with year only to find the trend in year
+
+```{r}
+# Fit model 
+
+# Intercept
+M2a <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 | FishID) + (1 | fyear), data, REML = T)
+M2b <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear), data, REML = T)
+
+# Model comparison
+models<-list(M1a, M2a, M2b)
+Modnames <- c('M1b', 'M2a', 'M2b') #no singular fit
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+# Model M2b better in AIC
+```
+
+```{r}
+# plot to understand random intercept and age slope
+
+lme4 <- lmer(log(increment) ~ c.log.age + (1 + c.log.age| fyear), data, REML = T)
+
+# get random effect values
+df.lme4 <- ranef(lme4)$fyear
+df.lme4 <- df.lme4 %>% 
+  mutate(year = as.numeric(rownames(df.lme4)),
+         year.intercept = `(Intercept)`,
+         year.slope = c.log.age) 
+
+# summary lme4 results:
+# log(increment) ~ 6.1 - 1.3*c.log.age + year.intercept + year.slope*c.log.age
+
+# plot log(increment) ~ age relationship at different year 
+# to simplify the fit values in Age 1 (c.log.age -1.13) and Age 10 (age 1.16) 
+df.lme4.age1 <- df.lme4 %>% mutate(fit = 6.1 - 1.3*(-1.13) + year.intercept + year.slope*(-1.13),
+                                   re = year.intercept + year.slope*(-1.13),
+                                           c.log.age = -1.13,
+                                           age = 1)
+df.lme4.age10 <- df.lme4 %>% mutate(fit = 6.1 - 1.3*(1.16) + year.intercept + year.slope*(1.16),
+                                    re = year.intercept + year.slope*(1.16),
+                                           c.log.age = 1.16,
+                                           age = 10)
+df.lme4 <- bind_rows(df.lme4.age1, df.lme4.age10)
+
+ggplot(data = df.lme4 %>% filter(year > 2010), aes(x = age, y = fit, color = as.factor(year) )) + geom_line()
+
+ggplot(data = df.lme4 %>% filter(year %in% c(2011, 2015, 2018)), aes(x = age, y = fit, color = as.factor(year) )) + geom_line()
+
+ggplot(data = df.lme4, aes(x = year, y = re, color = as.factor(age))) + 
+  geom_line() + 
+  geom_hline(yintercept = 0)
+
+ggplot(data = df.lme4, aes(x = year.intercept, y = year.slope)) + geom_point()
+
+```
+
+
+
+Best year structure: (1 | FishID) + (1 + c.log.age | year)
+
+###### **Visualize year trend**
+
+model with year intercept only (1 | year) (see Morrongiello 2015, Smoslinski et al., 2020)
+
+```{r}
+# year
+
+# extract random effect interecept, slope from the model
+year.df <- ranef(M2b)$fyear
+year.df <- year.df %>% 
+  mutate(year = as.numeric(rownames(year.df)),
+         intercept = `(Intercept)`,
+         se = sqrt(attr(ranef(M2b,postVar=TRUE) [["fyear"]],"postVar")[1,1,])) 
+
+
+# Plot Interecept
+ggplot() + 
+  geom_ribbon(data = year.df, 
+              aes(x = year,
+                  ymax = intercept + se,
+                  ymin = intercept - se), 
+              fill = 'grey70') +
+  geom_line(data = year.df, 
+            aes(x = year, 
+                y = intercept)) +
+  geom_hline(yintercept = 0, 
+            linetype="dashed") +
+  theme_classic() + 
+  #ggtitle("Year random effect") +
+  xlab("Year") +
+  ylab("Year random effect")
+
+# age1.re = intercept + c.log.age*(value_c.log.age 1)
+# age5.re = intercept + c.log.age*(value_c.log.age 5)
+ggplot() + 
+  geom_line(data = year.df, 
+            aes(x = year, 
+                y = intercept)) +
+  geom_line(data = year.df, 
+            aes(x = year, 
+                y = age1.re), color="blue") +
+  geom_line(data = year.df, 
+            aes(x = year, 
+                y = age5.re), color="red")
+
+
+```
+
+###### **Compare Temporal trend with extrinsic variables**
+
+Kelly to change the script
+
+
+```{r}
+library(patchwork)
+
+p.year.adult<- ggplot() +
+    geom_line(data = year.df, 
+            aes(x = year, 
+                y = age5.re),
+            color = '#01665e') +
+  geom_line(aes(x = year.df$year, y = 0), 
+            linetype = "dashed",
+            color = "grey70") +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  theme(legend.position = "top") +
+  ggtitle("Year effect")
+
+p.year.adult
+
+# Temperature
+p.temp.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = year, 
+                y = sbt),
+            color = '#01665e') +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  ggtitle("Sea Bottom Temperature (degC)") 
+  #xlim(2003, 2019)
+
+p.temp.adult
+
+# Fishing mortality
+p.f.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = GrowingYear, 
+                y = FishingMortality),
+            color = '#01665e') +
+   theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  ggtitle("Fishing Mortality") +
+  xlim(2003, 2019)
+
+# Stockbiomass
+p.sb.adult <- ggplot() + 
+  geom_line(data = data, 
+            aes(x = GrowingYear, 
+                y = SpawningStockBiomass.1000t),
+            color = '#01665e') +
+  theme_classic() +
+  theme(axis.title = element_blank()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+  panel.background = element_blank()) +
+  ggtitle("Spawning Stock Biomass (1000t)") +
+  xlim(2003, 2019)
+
+
+# Plot by Maturity
+p.adult <- p.year.adult/p.temp.adult/p.f.adult/p.sb.adult + theme(plot.title = element_text(face = "bold"))
+p.adult
+```
+
+#### 3.1.2. Intrinsic structure
+
+model selection using MuMIN
+
+```{r}
+M3 <- lmer(log(increment) ~ c.log.age*method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear), data, REML = F, na.action = "na.fail")
+model.compare.intrinsic <- dredge(M3, fixed = c("c.log.age"))
+model.compare.intrinsic
+
+
+```
+
+Best intrinsic structure: c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear)
+
+#### 3.1.3. Extrinsic structure
+
+
+```{r}
+# Fishing Pressure
+M4.f <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear) + c.sbt*c.log.age + c.f*c.log.age + c.sbt*c.f, data, REML = F, na.action = "na.fail")
+model.compare.extrinsic.f <- dredge(M4.f, fixed = c("c.log.age", "method", "c.log.aac"))
+model.compare.extrinsic.f
+
+## No singular warning
+M4.f <- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.log.age*c.f, data, REML = F)
+
+# Spawning Stock Biomass
+M4.ssb <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear) + c.sbt*c.log.age + c.ssb*c.log.age + c.sbt*c.ssb, data, REML = F, na.action = "na.fail")
+model.compare.extrinsic.ssb <- dredge(M4.ssb, fixed = c("c.log.age", "method", "c.log.aac"))
+model.compare.extrinsic.ssb
+
+## No singular warning
+M4.ssb <- lmer(log(increment) ~ c.log.age + method + c.log.aac + (1 | FishID) + (1 + c.log.age| fyear), data, REML = F)
+
+# Model comparison - Fishing Pressure and Spawning Stock Biomass
+models<-list(M4.f, M4.ssb)
+Modnames <- c('M4.f', 'M4.ssb')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+# TAKEN M4.f - also check delta (1.65 close to 2, if lower then consider taking the simpler)
+
+summary(M4.f)
+
+# ANOVA?
+
+# Refit with REML 
+M4.reml <- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.log.age*c.f, data, REML = T)
+```
+
+#### sbt.within vs sbt.among
+```{r}
+M4.test <- lmer(log(increment) ~ c.log.age + c.log.aac + method + (1 | FishID) + (1 + c.log.age| fyear) + sbt.within*c.log.age + sbt.among*c.log.age + c.f*c.log.age + sbt.within*c.f + sbt.among*c.f, data, REML = F, na.action = "na.fail")
+model.compare.extrinsic.sbt <- dredge(M4.test, fixed = c("c.log.age", "method", "c.log.aac", "sbt.within", "sbt.among"))
+model.compare.extrinsic.sbt
+
+model.compare.extrinsic.sbt$AICc[1]
+model.compare.extrinsic.ssb$AICc[1]
+model.compare.extrinsic.f$AICc[1]
+
+# best extrinsic model
+M4.reml <- lmer(log(increment) ~ c.log.age + c.log.aac + method + (1 | FishID) + (1 + c.log.age| fyear) + sbt.within*c.log.age + sbt.among, data, REML = T)
+
+```
+
+
+#### 3.1.4. Visualize effect
+
+##### Age
+
+```{r}
+library("tidyverse")
+df_age <- unique(select(data, age, c.log.age))
+
+age.plot <- as.data.frame (Effect ('c.log.age', M4.reml, xlevels = list(c.log.age = df_age$c.log.age)))
+#age.plot <- as.data.frame (Effect (c('Age'), M4.reml, xlevels = list(Age=seq(1,14, by=1))))
+age.plot <- age.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower),
+                                Age = df_age$age)
+
+ggplot() + 
+  geom_point(data = age.plot, aes(x = Age, y = transfit)) +
+  geom_errorbar(data = age.plot, aes(x = Age,
+                                    ymin = tranlower, 
+                                    ymax = transupper), 
+                width=.2) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Age (year)") +
+  ylab("Predicted annual growth (µm)")
+```
+
+##### Age at capture
+
+```{r}
+df_AAC <- unique(select(data, aac, c.log.aac))
+
+aac.plot <- as.data.frame (Effect ('c.log.aac', M4.reml, xlevels = list(c.log.aac = df_AAC$c.log.aac)))
+#age.plot <- as.data.frame (Effect (c('AgeAtCapture'), M4.reml, xlevels = list(Age=seq(1,14, by=1))))
+aac.plot <- aac.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower),
+                                aac = df_AAC$aac)
+
+ggplot() + 
+  geom_ribbon(data = aac.plot, 
+              aes(x = aac,
+                  ymax = transupper,
+                  ymin = tranlower),
+             alpha = 0.5) +
+  geom_line(data = aac.plot, 
+            aes(x = aac, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Age At Capture (year)") +
+  ylab("Predicted annual growth (µm)") +
+  xlim(3,15)
+```
+
+##### FishingMortality
+
+```{r}
+df_f <- unique(select(data, f, c.f)) %>% round(2)
+df_age <- unique(select(data, age, c.log.age)) %>% round(2)
+
+f.plot <- as.data.frame (Effect (c('c.f','c.log.age'),
+                                 M4.reml, 
+                                 xlevels = list(c.f = df_f$c.f, 
+                                                c.log.age=df_age$c.log.age)))
+
+f.plot <- f.plot %>% mutate(transfit = exp(fit),
+                            transupper = exp(upper),
+                            tranlower = exp(lower)
+                                 )
+
+f.plot <- left_join(f.plot, df_f, by = "c.f")
+f.plot <- left_join(f.plot, df_age, by = "c.log.age")
+
+#df_age <- df_age %>% mutate(age = as.factor(age),
+                            #clogAge = as.factor(clogAge))
+#f.plot <- left_join(f.plot, df_f, by = "f")
+
+#df_f <- unique(select(data, f, c.f))
+
+ggplot() +
+ geom_ribbon(data = f.plot, 
+              aes(x = f,
+                  ymax = transupper,
+                  ymin = tranlower, 
+                  fill = factor(age)),
+             alpha = 0.5) +
+  geom_line(data = f.plot, 
+            aes(x = f, 
+                y = transfit, color = factor(age)),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  xlab("Fishing Mortality") +
+  ylab("Predicted annual growth (µm)") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold"))
+  
+```
+
+```{r}
+##### sbt
+
+df_sbt <- unique(select(data, sbt, c.sbt))
+df_sbt <- round(df_sbt, 2)
+
+df_f <- unique(select(data, f, c.f))
+df_f <- round(df_f, 2)
+
+# sbt and age
+sbt.plot <- as.data.frame(Effect(c('c.sbt', 'c.f'), 
+                                 M4.reml, 
+                                 xlevels = list(c.sbt = df_sbt$c.sbt,
+                                                c.f = c(min(df_f$c.f), max(df_f$c.f)) )))
+
+
+
+sbt.plot <- sbt.plot %>% mutate(transfit = exp(fit),
+                            transupper = exp(upper),
+                            tranlower = exp(lower)
+                            )
+
+ggplot() +
+ geom_ribbon(data = sbt.plot, 
+              aes(x = c.sbt,
+                  ymax = transupper,
+                  ymin = tranlower),
+             alpha = 0.5) +
+  geom_line(data = sbt.plot, 
+            aes(x = c.sbt, 
+                y = transfit),
+            size = 1) +
+  theme_classic() + 
+  facet_wrap(~ c.f)
+
+  
+```
+
+```{r}
+# sbt, f, and age
+
+df_sbt <- unique(select(data, sbt, c.sbt))
+df_sbt <- round(df_sbt, 2)
+
+df_f <- unique(select(data, f, c.f))
+df_f <- round(df_f, 2)
+
+df_age <- unique(select(data, age, c.log.age))
+df_age <- round(df_age, 2)
+
+# sbt and age
+sbt.plot <- as.data.frame(Effect(c('c.sbt', 'c.f', 'c.log.age'), 
+                                 M4.reml, 
+                                 xlevels = list(c.sbt = df_sbt$c.sbt,
+                                                c.f = c(min(df_f$c.f), max(df_f$c.f)),
+                                                c.log.age = df_age$c.log.age)))
+
+
+
+sbt.plot <- sbt.plot %>% mutate(transfit = exp(fit),
+                            transupper = exp(upper),
+                            tranlower = exp(lower)
+                            )
+
+ggplot() +
+ geom_ribbon(data = sbt.plot %>% filter(c.f < 0, c.log.age < 0.5), 
+              aes(x = c.sbt,
+                  ymax = transupper,
+                  ymin = tranlower,
+                  fill = as.factor(c.log.age)),
+             alpha = 0.5) +
+  geom_line(data = sbt.plot %>% filter(c.f < 0, c.log.age < 0.5), 
+            aes(x = c.sbt, 
+                y = transfit,
+                color = as.factor(c.log.age)),
+            size = 1) +
+  theme_classic() + 
+  facet_wrap(~ c.f) +
+  theme(legend.position = "none")
+
+ggplot() +
+ geom_ribbon(data = sbt.plot %>% filter(c.f < 0, c.log.age < 0.5), 
+              aes(x = c.sbt,
+                  ymax = upper,
+                  ymin = lower,
+                  fill = as.factor(c.log.age)),
+             alpha = 0.5) +
+  geom_line(data = sbt.plot %>% filter(c.f < 0, c.log.age < 0.5), 
+            aes(x = c.sbt, 
+                y = fit,
+                color = as.factor(c.log.age)),
+            size = 1) +
+  theme_classic() + 
+  facet_wrap(~ c.f) +
+  theme(legend.position = "none")
+
+
+```
+
+
+
+
+##### Temperature among and within individual
+
+```{r}
+install.packages("stats")
+install.packages("plyr")
+install.packages("base")
+install.packages("effects")
+library(stats)
+library(plyr)
+library(base)
+library(effects)
+
+# Nnew variables for the mean temperature experienced by an individual across its lifetime (sbt.among) and the deviation of each observation from the individual-specific mean (sbt.within)
+data$sbt.among<-ave(data$sbt,data$FishID)
+data<-ddply(data, .(FishID), transform, sbt.within = scale(sbt,scale=F))
+
+# M5 within and among individual temperature - just fixed effects
+M5<- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.(sbt.among) + c.(sbt.within), data, REML = T)
+
+# Individual-specific differences (fitting random sbt.within slope for each FishID)
+# M6 within and among individual temperature - with random within slope
+M6<- lmer(log(increment) ~ c.log.age + method + c.log.aac + c.f + (1 | FishID) + (1 + c.log.age| fyear) + c.(sbt.among) + c.(sbt.within) + (c.(sbt.within) |FishID), data, REML = T)
+
+## Comparison of models
+models<-list(M5,M6)
+Modnames <- c('M5','M6')
+aictab(cand.set = models, modnames = Modnames, sort = TRUE)
+
+# M6 best AICc
+# Evidence of individual-specific reaction norms. Majority of the population-level temperature effect due to within-individual differences in lifetime temperature?
+
+
+
+
+sbt.within.plot <- as.data.frame (effect(c('sbt.within'), M4.reml, xlevels = 19))
+sbt.within.plot <- sbt.within.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower))
+
+ggplot() +
+ geom_ribbon(data = sbt.within.plot, 
+              aes(x = withinIDV,
+                  ymax = transupper,
+                  ymin = tranlower),
+             fill = 'grey70') +
+  geom_line(data = sbt.within.plot, 
+            aes(x = withinIDV, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold")) +
+  xlab("Sea Bottom Temperature within individual (degC)") +
+  ylab("Predicted annual growth (µm)")
+
+```
+
+##### **Temperature among individual**
+
+```{r}
+sbt.among.plot <- as.data.frame (Effect (c('amongIDV'), M4.reml, xlevels = 19))
+sbt.among.plot <- sbt.among.plot %>% mutate(transfit = exp(fit),
+                                transupper = exp(upper),
+                                tranlower = exp(lower))
+
+ggplot() +
+ geom_ribbon(data = sbt.among.plot, 
+              aes(x = amongIDV,
+                  ymax = transupper,
+                  ymin = tranlower),
+             fill = 'grey70') +
+  geom_line(data = sbt.among.plot, 
+            aes(x = amongIDV, 
+                y = transfit),
+            size = 1) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank()) +
+  theme(axis.title = element_text(face = "bold")) +
+  xlab("Sea Bottom Temperature among individual (degC)") +
+  ylab("Predicted annual growth (µm)")
+```
